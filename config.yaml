@@ -1,0 +1,43 @@
+# ProjectOSINT defaults.  Secrets belong in .env, not here.
+# Environment variables (OSINT_*) override every value below.
+
+deadline_s: 10.0            # global per-scan deadline
+source_timeout_s: 8.0       # per-collector ceiling
+concurrency: 12             # parallel collectors (TaskGroup tasks)
+max_findings_per_source: 200
+
+data_dir: data
+database: data/osint.db
+cache_ttl_s: 3600           # 0 disables the result cache entirely
+
+user_agent: "ProjectOSINT/0.1 (authorised reconnaissance)"
+follow_redirects: true
+verify_tls: true
+respect_robots: true
+http_timeout_s: 8.0
+retries: 2
+
+log_level: INFO
+log_json: true
+
+# Sources listed here are never run, whatever the CLI asks for.
+disabled_sources: []
+
+# Empty means "every category".  Example: [dns, certificates, registration]
+enabled_categories: []
+
+rate_limit:
+  default_rps: 1.0
+  burst: 2
+  per_host:
+    crt.sh: 0.5
+    web.archive.org: 0.5
+    api.github.com: 0.5
+
+# Keys are optional: a source without its key reports status=skipped.
+api_keys:
+  shodan: null
+  hibp: null
+  urlscan: null
+  virustotal: null
+  github: null

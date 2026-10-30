@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ProjectOSINT — reconnaissance console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2314161a'/><path d='M10 22V10h6.2c2.8 0 4.6 1.6 4.6 4.2s-1.8 4.2-4.6 4.2H13V22z' fill='%23c9d6e2'/></svg>">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">PO</span>
+        <span class="brand-text">
+          <span class="brand-name">ProjectOSINT</span>
+          <span class="brand-ver" id="app-version">v0.1.0</span>
+        </span>
+      </div>
+
+      <nav class="nav" aria-label="Primary">
+        <button class="nav-item is-active" data-view="scan">
+          <span class="nav-label">Scan</span>
+          <span class="nav-hint">collect</span>
+        </button>
+        <button class="nav-item" data-view="history">
+          <span class="nav-label">History</span>
+          <span class="nav-hint">stored</span>
+        </button>
+        <button class="nav-item" data-view="sources">
+          <span class="nav-label">Sources</span>
+          <span class="nav-hint" id="source-count">—</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <p class="scope-note">
+          Passive, lawfully-scoped collection. Every query is logged with its
+          endpoint, timestamp and rate limit. No authentication is bypassed.
+        </p>
+        <dl class="mini-stats" id="mini-stats">
+          <div><dt>scans</dt><dd id="stat-scans">—</dd></div>
+          <div><dt>findings</dt><dd id="stat-findings">—</dd></div>
+        </dl>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h1 class="topbar-title" id="view-title">New scan</h1>
+        <div class="topbar-meta">
+          <span class="status-dot" id="health-dot"></span>
+          <span id="health-label">connecting</span>
+        </div>
+      </header>
+
+      <section class="view" id="view-scan">
+        <form class="scan-bar" id="scan-form" autocomplete="off">
+          <label class="field field-grow">
+            <span class="field-label">Target</span>
+            <input id="target" name="target" type="text" spellcheck="false"
+                   placeholder="example.com   ·   8.8.8.8   ·   analyst@example.com   ·   handle">
+          </label>
+          <label class="field field-tight">
+            <span class="field-label">Deadline</span>
+            <select id="deadline">
+              <option value="5">5 s</option>
+              <option value="10" selected>10 s</option>
+              <option value="20">20 s</option>
+              <option value="30">30 s</option>
+            </select>
+          </label>
+          <button class="btn-primary" id="run" type="submit">Run scan</button>
+        </form>
+
+        <p class="form-error hidden" id="form-error"></p>
+
+        <section class="console hidden" id="console" aria-live="polite">
+          <div class="console-head">
+            <span>Collector progress</span>
+            <span class="mono" id="progress-count">0 / 0</span>
+          </div>
+          <div class="chips" id="chips"></div>
+        </section>
+
+        <section class="results hidden" id="results">
+          <div class="summary" id="summary"></div>
+
+          <div class="filters">
+            <div class="sev-filters" id="sev-filters" role="group" aria-label="Severity filter"></div>
+            <label class="search">
+              <input id="search" type="search" placeholder="filter value, detail, kind" spellcheck="false">
+            </label>
+            <select id="source-filter" aria-label="Source filter"><option value="">all sources</option></select>
+            <div class="export">
+              <a class="btn-ghost" id="export-json" href="#" download>JSON</a>
+              <a class="btn-ghost" id="export-csv" href="#" download>CSV</a>
+              <a class="btn-ghost" id="export-pdf" href="#" download>PDF</a>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="findings" id="findings-table">
+              <thead>
+                <tr>
+                  <th class="col-sev">Severity</th>
+                  <th class="col-src">Source</th>
+                  <th class="col-kind">Kind</th>
+                  <th class="col-value">Value</th>
+                  <th class="col-detail">Detail</th>
+                </tr>
+              </thead>
+              <tbody id="findings-body"></tbody>
+            </table>
+            <p class="table-empty hidden" id="table-empty">No findings match the current filters.</p>
+          </div>
+        </section>
+
+        <section class="empty" id="empty">
+          <p class="empty-kicker">Ready</p>
+          <p class="empty-copy">
+            Enter a domain, IP address, URL, email or handle. Collectors run
+            concurrently under one deadline; slow sources degrade to
+            <em>partial</em> instead of stalling the run.
+          </p>
+        </section>
+      </section>
+
+      <section class="view hidden" id="view-history">
+        <div class="table-wrap">
+          <table class="findings history">
+            <thead>
+              <tr><th>Scan</th><th>Target</th><th>Findings</th><th>Sources</th><th>Started</th><th>Duration</th></tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+          <p class="table-empty hidden" id="history-empty">No stored scans yet.</p>
+        </div>
+      </section>
+
+      <section class="view hidden" id="view-sources">
+        <div class="table-wrap">
+          <table class="findings sources">
+            <thead>
+              <tr><th>Source</th><th>Category</th><th>Targets</th><th>Weight</th><th>Key</th><th>State</th></tr>
+            </thead>
+            <tbody id="sources-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <template id="chip-template">
+    <span class="chip">
+      <span class="chip-dot"></span>
+      <span class="chip-name"></span>
+      <span class="chip-count mono"></span>
+    </span>
+  </template>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
