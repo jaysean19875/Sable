@@ -19,16 +19,17 @@ if (-not (Test-Path "$root\assets\projectosint.ico")) {
     & "$root\.venv\Scripts\python.exe" "$root\assets\make_icon.py"
 }
 
-# Dead weight for a runtime bundle. Two of these are surprising but real:
-#   mypy -> pulled in by PyInstaller's pydantic hook (collect_submodules('pydantic'))
-#   PIL  -> pulled in by reportlab's optional imaging support
-# Both are excluded here; the app never imports them at runtime.
+# Dead weight for a runtime bundle. Interesting ones:
+#   mypy -> pulled in by PyInstaller's pydantic hook (collect_submodules('pydantic'));
+#           never imported at runtime, safe to drop.
+#   PIL  -> MUST stay: reportlab imports it at module import time, so excluding
+#           it makes the frozen app exit immediately.
 $excludes = @(
     "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel",
     "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtMultimedia", "PySide6.QtCharts",
     "PySide6.Qt3DCore", "PySide6.QtDataVisualization", "PySide6.QtTest",
     "PySide6.QtPdf", "PySide6.QtSql", "PySide6.QtSvg",
-    "mypy", "PIL", "tkinter", "pydantic.mypy", "pytest", "respx"
+    "mypy", "pydantic.mypy", "tkinter", "pytest", "respx"
 )
 $excludeArgs = foreach ($module in $excludes) { "--exclude-module"; $module }
 
