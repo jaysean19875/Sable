@@ -2,18 +2,25 @@
 
 A bounded, provenance-rich OSINT collection platform: modular collectors, an
 asyncio scheduler with hard deadlines, a normalised schema, a SQLite store, a
-JSON/CSV/PDF export path and a dark dashboard â€” built so that every finding
+JSON/CSV/PDF export path and a native desktop UI — built so that every finding
 can be traced back to the endpoint that produced it.
 
 ```text
- target â”€â”€â–¶ registry.select â”€â”€â–¶ asyncio.TaskGroup â”€â”€â–¶ normalise â”€â”€â–¶ SQLite â”€â”€â–¶ export
+ target ──▶ registry.select ──▶ asyncio.TaskGroup ──▶ normalise ──▶ SQLite ──▶ export
             (kind/category)      per-source timeout      dedupe       scans     JSON/CSV/PDF
-                                 + global deadline        + caps     findings      â”‚
-                                        â”‚                                        â–¼
-                              token bucket per host                     dashboard (SSE)
-                                        â”‚
+                                 + global deadline        + caps     findings      │
+                                        │                                        ▼
+                              token bucket per host                     desktop (PySide6)
+                                        │
                                  cache (target keyed)
 ```
+
+## Download (Windows)
+
+Prebuilt: <https://github.com/jaysean19875/Sable/releases/latest> — a single-file
+`ProjectOSINT.exe`, no Python required. Drop it anywhere; it keeps its
+`config.yaml`, `.env` and `data\` beside itself. Rebuild it any time with
+`build_exe.ps1` (PyInstaller).
 
 ## Quick start
 
@@ -40,7 +47,7 @@ with `--out`, `report.json`, `findings.csv` and `report.pdf`.
 
 ## What a scan actually does
 
-1. **Classify** the target (`domain`, `ip`, `url`, `email`, `username`) â€”
+1. **Classify** the target (`domain`, `ip`, `url`, `email`, `username`) —
    routing is by target kind, so an IP-only adapter never runs against a
    domain.
 2. **Select** collectors from the registry, honouring category/source filters
@@ -59,7 +66,7 @@ and finish in milliseconds without touching the network.
 ## Collectors
 
 33 sources are registered; 32 are enabled by default. Four of those need an
-API key and are reported as `skipped` â€” never as failures â€” when it is absent.
+API key and are reported as `skipped` — never as failures — when it is absent.
 One search-engine source is deliberately opt-in.
 
 | category | sources |
@@ -82,7 +89,8 @@ Only public, unauthenticated endpoints are used. The platform does not bypass
 authentication, does not fuzz paths, does not attempt zone transfers or login
 form scraping, and honours `robots.txt` for anything beyond the homepage it is
 explicitly asked to fingerprint. Every adapter carries a `lawful_note` that is
-copied into the provenance of each finding and into every export.
+copied into the provenance of each finding and into every export. The desktop
+app additionally asks for acknowledgement of this scope on first launch.
 
 Rate limiting is not advisory: all HTTP traffic goes through a per-host token
 bucket, and DNS lookups carry explicit timeouts.
@@ -132,7 +140,7 @@ longer hosts it.  Start it explicitly when you want it:
 ## Development
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest      # 97 tests, no network
+.\.venv\Scripts\python.exe -m pytest      # 98 tests, no network
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m mypy projectosint
 ```
@@ -146,6 +154,7 @@ platform with a synthetic engine.
 
 ```text
 ProjectOSINT.py    double-click launcher for the desktop app
+build_exe.ps1      PyInstaller build for ProjectOSINT.exe
 projectosint/
   config.py        typed settings, YAML + env precedence
   models.py        Target, Finding, Provenance, CollectorResult, ScanReport
@@ -162,7 +171,7 @@ projectosint/
   desktop.py       PySide6 window: chips console, findings, history, consent
   collectors/      one module per source family
   web/             FastAPI app + static dashboard (library, not hosted)
-tests/             97 offline tests
+tests/             98 offline tests
 ```
 
 ## Known limits
@@ -175,4 +184,3 @@ tests/             97 offline tests
 - The search-engine adapter is opt-in because automated querying may violate
   engine terms of service.
 - PDF export caps the table at 400 rows; the JSON/CSV exports are complete.
-
