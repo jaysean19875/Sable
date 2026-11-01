@@ -63,6 +63,20 @@ class CollectorContext:
             raise CollectorHttpError(f"HTTP {result.status} for {result.url}", status=result.status)
         return result
 
+    async def post_json(
+        self,
+        url: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        """POST a JSON body through the shared (rate limited) client."""
+        self.calls += 1
+        response = await self.client.client.post(url, json=json_body, headers=headers)
+        if not response.is_success:
+            raise CollectorHttpError(f"HTTP {response.status_code} for {url}", status=response.status_code)
+        return response.json()
+
 
 class CollectorHttpError(RuntimeError):
     def __init__(self, message: str, *, status: int | None = None) -> None:

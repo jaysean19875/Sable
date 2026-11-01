@@ -16,7 +16,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 from projectosint.config import Settings
-from projectosint.desktop import ConsentDialog, MainWindow, _qss
+from projectosint.desktop import LicenseDialog, MainWindow, StartupNoticeDialog, _qss
 
 OUT = Path(__file__).resolve().parent
 TMP = Path(tempfile.mkdtemp(prefix="osint-desktop-"))
@@ -35,17 +35,38 @@ settings = Settings(
     rate_limit={"default_rps": 1.0, "burst": 2},
 )
 
-consent = ConsentDialog()
+consent = LicenseDialog()
+consent.key_input.setText("K8QEVB-7V2B54-DPQN9-9OCB1D6-ZVFASTH-MNBK42")
 consent.show()
 app.processEvents()
-consent.grab().save(str(OUT / "desktop-consent.png"))
+consent.grab().save(str(OUT / "desktop-license.png"))
 consent.close()
+
+notice = StartupNoticeDialog()
+notice.show()
+app.processEvents()
+notice.grab().save(str(OUT / "desktop-notice.png"))
+notice.close()
 
 window = MainWindow(settings)
 window.resize(1260, 840)
 window.show()
 app.processEvents()
 window.grab().save(str(OUT / "desktop-idle.png"))
+
+# Probe Bot page (offline FAQ mode, nothing sent anywhere)
+window._nav_buttons["bot"].setChecked(True)
+window._show_page("bot")
+window.bot_input.setText("How do I export a report?")
+window._on_bot_send()
+if window.bot_worker is not None:
+    window.bot_worker.wait(8000)
+app.processEvents()
+time.sleep(0.3)
+app.processEvents()
+window.grab().save(str(OUT / "desktop-probe-bot.png"))
+window._nav_buttons["scan"].setChecked(True)
+window._show_page("scan")
 
 window.target_input.setText("example.com")
 window._on_run_clicked()
@@ -75,6 +96,7 @@ window.grab().save(str(OUT / "desktop-history.png"))
 
 # Personal Data page (idle, then a real check run)
 window._nav_buttons["personal"].setChecked(True)
+window._personal_popup_shown = True  # suppress the modal popup in headless capture
 window._show_page("personal")
 app.processEvents()
 window.grab().save(str(OUT / "desktop-personal.png"))

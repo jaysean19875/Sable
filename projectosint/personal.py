@@ -58,6 +58,7 @@ class PersonalReport(BaseModel):
     password_seen_in_breaches: int | None = None
     results: list[PersonalSourceResult] = Field(default_factory=list)
     files: list[str] = Field(default_factory=list)
+    sources_capped: bool = False
     note: str = (
         "Local only: this report was written to the RESULTS folder beside the "
         "application and was never uploaded anywhere."
@@ -127,6 +128,10 @@ async def run_checks(
         classes = registry.select(kinds={target.kind}, disabled=settings.disabled_sources)
         for cls in classes:
             jobs.append((cls, target, f"{cls.spec.name} · {target.label}"))
+    cap = settings.personal_max_sources
+    if len(jobs) > cap:
+        jobs = jobs[:cap]
+        report.sources_capped = True
     password_name = f"{_PASSWORD_SOURCE} · password"
 
     collected: dict[str, PersonalSourceResult] = {}

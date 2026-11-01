@@ -363,3 +363,375 @@ class DevToUser(_PublicProfileCollector):
                 query=self.ctx.target.value,
             )
         ]
+
+
+@register(
+    CollectorSpec(
+        name="mojang_user",
+        category=_CATEGORY,
+        description="Minecraft (Java) account UUID via Mojang's public API",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="Mojang public profile API; username to UUID only.",
+    )
+)
+class MojangUser(_PublicProfileCollector):
+    endpoint = "https://api.mojang.com/users/profiles/minecraft/{u}"
+
+    async def lookup(self, username: str) -> Any | None:
+        try:
+            payload = await self.ctx.get_json(self.endpoint.format(u=username))
+        except CollectorHttpError as exc:
+            if exc.status in {204, 404}:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.mojang",
+                str(payload.get("name") or self.ctx.target.value),
+                detail="Minecraft account exists (Mojang)",
+                confidence=Confidence.HIGH,
+                tags=("identity", "minecraft"),
+                evidence={"uuid": payload.get("id")},
+                endpoint=self.endpoint.format(u=self.ctx.target.value),
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="roblox_user",
+        category=_CATEGORY,
+        description="Roblox account presence via the public users API",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="Roblox public users endpoint; username lookup only.",
+    )
+)
+class RobloxUser(_PublicProfileCollector):
+    endpoint = "https://users.roblox.com/v1/usernames/users"
+
+    async def lookup(self, username: str) -> Any | None:
+        try:
+            payload = await self.ctx.post_json(
+                self.endpoint,
+                json_body={"usernames": [username], "excludeBannedUsers": False},
+            )
+        except CollectorHttpError as exc:
+            if exc.status in {400, 404}:
+                return None
+            raise
+        data = payload.get("data") if isinstance(payload, dict) else []
+        return data[0] if data else None
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.roblox",
+                f"https://www.roblox.com/users/{payload.get('id')}/profile",
+                detail=f"Roblox account '{payload.get('name') or self.ctx.target.value}'",
+                confidence=Confidence.HIGH,
+                tags=("identity", "roblox"),
+                evidence={"id": payload.get("id"), "display_name": payload.get("displayName")},
+                endpoint=self.endpoint,
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="lichess_user",
+        category=_CATEGORY,
+        description="Lichess public player profile",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="Lichess public API.",
+    )
+)
+class LichessUser(_PublicProfileCollector):
+    endpoint = "https://lichess.org/api/user/{u}"
+
+    async def lookup(self, username: str) -> Any | None:
+        try:
+            payload = await self.ctx.get_json(self.endpoint.format(u=username))
+        except CollectorHttpError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.lichess",
+                f"https://lichess.org/@/{self.ctx.target.value}",
+                detail="Lichess profile exists",
+                confidence=Confidence.HIGH,
+                tags=("identity", "chess"),
+                evidence={"id": payload.get("id"), "created_at": payload.get("createdAt")},
+                endpoint=self.endpoint.format(u=self.ctx.target.value),
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="bitbucket_user",
+        category=_CATEGORY,
+        description="Bitbucket public account",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="Bitbucket public API.",
+    )
+)
+class BitbucketUser(_PublicProfileCollector):
+    endpoint = "https://api.bitbucket.org/2.0/users/{u}"
+
+    async def lookup(self, username: str) -> Any | None:
+        try:
+            payload = await self.ctx.get_json(self.endpoint.format(u=username))
+        except CollectorHttpError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.bitbucket",
+                str(payload.get("links", {}).get("html", {}).get("href")
+                    or f"https://bitbucket.org/{payload.get('username')}"),
+                detail=f"Bitbucket account '{payload.get('display_name') or payload.get('username')}'",
+                confidence=Confidence.HIGH,
+                tags=("identity", "bitbucket"),
+                endpoint=self.endpoint.format(u=self.ctx.target.value),
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="codeberg_user",
+        category=_CATEGORY,
+        description="Codeberg public account",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="Codeberg public API.",
+    )
+)
+class CodebergUser(_PublicProfileCollector):
+    endpoint = "https://codeberg.org/api/v1/users/{u}"
+
+    async def lookup(self, username: str) -> Any | None:
+        try:
+            payload = await self.ctx.get_json(self.endpoint.format(u=username))
+        except CollectorHttpError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.codeberg",
+                f"https://codeberg.org/{self.ctx.target.value}",
+                detail="Codeberg account exists",
+                confidence=Confidence.HIGH,
+                tags=("identity", "codeberg"),
+                evidence={"login": payload.get("login")},
+                endpoint=self.endpoint.format(u=self.ctx.target.value),
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="bluesky_user",
+        category=_CATEGORY,
+        description="Bluesky handle resolution via the public API",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="Bluesky public API; handle lookup only.",
+    )
+)
+class BlueskyUser(_PublicProfileCollector):
+    endpoint = "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile"
+
+    async def lookup(self, username: str) -> Any | None:
+        try:
+            payload = await self.ctx.get_json(self.endpoint, params={"actor": username})
+        except CollectorHttpError as exc:
+            if exc.status in {400, 404}:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.bluesky",
+                f"https://bsky.app/profile/{payload.get('handle') or payload.get('did')}",
+                detail=f"Bluesky profile '{payload.get('displayName') or payload.get('handle')}'",
+                confidence=Confidence.HIGH,
+                tags=("identity", "bluesky"),
+                evidence={"did": payload.get("did"), "handle": payload.get("handle")},
+                endpoint=self.endpoint,
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="npm_user",
+        category=_CATEGORY,
+        description="npm registry account",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="npm public registry user lookup.",
+    )
+)
+class NpmUser(_PublicProfileCollector):
+    endpoint = "https://registry.npmjs.org/-/user/org.couchdb.user:{u}"
+
+    async def lookup(self, username: str) -> Any | None:
+        try:
+            payload = await self.ctx.get_json(self.endpoint.format(u=username))
+        except CollectorHttpError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.npm",
+                f"https://www.npmjs.com/~{self.ctx.target.value}",
+                detail=f"npm account '{payload.get('name') or self.ctx.target.value}'",
+                confidence=Confidence.HIGH,
+                tags=("identity", "npm"),
+                evidence={"created": payload.get("created")},
+                endpoint=self.endpoint.format(u=self.ctx.target.value),
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="speedrun_user",
+        category=_CATEGORY,
+        description="speedrun.com public profile",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="speedrun.com public API.",
+    )
+)
+class SpeedrunUser(_PublicProfileCollector):
+    endpoint = "https://www.speedrun.com/api/v1/users"
+
+    async def lookup(self, username: str) -> Any | None:
+        payload = await self.ctx.get_json(self.endpoint, params={"name": username})
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not data:
+            return None
+        return data[0]
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.speedrun",
+                str(payload.get("weblink") or f"https://www.speedrun.com/users/{payload.get('id')}"),
+                detail=f"speedrun.com profile '{payload.get('names', {}).get('international')}'",
+                confidence=Confidence.HIGH,
+                tags=("identity", "speedrun"),
+                evidence={"id": payload.get("id"), "signup": payload.get("signup")},
+                endpoint=self.endpoint,
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="scratch_user",
+        category=_CATEGORY,
+        description="Scratch (MIT) public account",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="Scratch public API.",
+    )
+)
+class ScratchUser(_PublicProfileCollector):
+    endpoint = "https://api.scratch.mit.edu/users/{u}"
+
+    async def lookup(self, username: str) -> Any | None:
+        try:
+            payload = await self.ctx.get_json(self.endpoint.format(u=username))
+        except CollectorHttpError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
+
+    def render(self, payload: Any) -> list[Finding]:
+        return [
+            self.finding(
+                "identity.scratch",
+                f"https://scratch.mit.edu/users/{self.ctx.target.value}/",
+                detail="Scratch account exists",
+                confidence=Confidence.HIGH,
+                tags=("identity", "scratch"),
+                evidence={"id": payload.get("id"), "joined": payload.get("history", {}).get("joined")},
+                endpoint=self.endpoint.format(u=self.ctx.target.value),
+                query=self.ctx.target.value,
+            )
+        ]
+
+
+@register(
+    CollectorSpec(
+        name="osrs_hiscores",
+        category=_CATEGORY,
+        description="Old School RuneScape hiscores entry (public lookup)",
+        target_kinds=_USER,
+        weight="light",
+        lawful_note="Jagex public hiscores endpoint.",
+    )
+)
+class OsrsHiscores(BaseCollector):
+    endpoint = "https://secure.runescape.com/m=hiscore_oldschool/index_lite.ws"
+
+    async def collect(self) -> list[Finding]:
+        username = self.ctx.target.value
+        response = await self.ctx.get(self.endpoint, params={"player": username})
+        if response.status != 200:
+            raise CollectorHttpError(
+                f"hiscores returned HTTP {response.status}", status=response.status
+            )
+        rows = response.text.strip().splitlines()
+        if not rows or not any("," in row for row in rows):
+            return []
+        return [
+            self.finding(
+                "identity.osrs",
+                username,
+                detail="Old School RuneScape hiscores entry exists",
+                confidence=Confidence.HIGH,
+                tags=("identity", "gaming"),
+                evidence={"hiscores_entries": len(rows)},
+                endpoint=self.endpoint,
+                query=username,
+            )
+        ]

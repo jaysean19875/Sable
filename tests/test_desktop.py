@@ -16,17 +16,23 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import httpx
 import pytest
-from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QLineEdit
+import respx
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QLabel, QLineEdit
 
 import projectosint.desktop as desktop
 from projectosint import registry
 from projectosint.desktop import (
     PERSONAL_NOTICE,
-    ConsentDialog,
+    STARTUP_NOTICE,
+    LicenseDialog,
     MainWindow,
-    accept_consent,
-    consent_needed,
+    ProbeBotWorker,
+    StartupNoticeDialog,
+    license_needed,
+    save_license,
+    valid_license_key,
 )
 from projectosint.models import (
     Category,
@@ -120,26 +126,72 @@ def seed_report(scan_id: str) -> ScanReport:
 
 # ─────────────────────────────────────────────────────────────────────────
 
-def test_consent_flow(settings) -> None:
-    assert consent_needed(settings) is True
-    accept_consent(settings)
-    assert consent_needed(settings) is False
-    payload = json.loads(desktop.consent_file(settings).read_text(encoding="utf-8"))
-    assert payload["accepted"] is True
+def test_license_flow(settings) -> None:
+    assert license_needed(settings) is True
+    save_license(settings)
+    assert license_needed(settings) is False
+    payload = json.loads(desktop.license_file(settings).read_text(encoding="utf-8"))
+    assert payload["licensed"] is True
 
 
-def test_consent_dialog_has_scope_text(qapp: QApplication) -> None:
-    dialog = ConsentDialog()
-    assert "passive" in dialog.windowTitle().lower() or "consent" in dialog.windowTitle().lower()
+def test_license_key_validation() -> None:
+    assert valid_license_key("K8QEVB-7V2B54-DPQN9-9OCB1D6-ZVFASTH-MNBK42") is True
+    assert valid_license_key("k8qevb7v2b54dpqn99ocb1d6zvfasthmnbk42") is True
+    assert valid_license_key("WRONG-KEY-0000") is False
+    assert valid_license_key("") is False
+
+
+def test_license_dialog_rejects_bad_key(qapp: QApplication) -> None:
+    dialog = LicenseDialog()
+    dialog.key_input.setText("nope")
+    dialog._on_activate()
+    assert not dialog.error_label.isHidden()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    dialog.key_input.setText("K8QEVB-7V2B54-DPQN9-9OCB1D6-ZVFASTH-MNBK42")
+    dialog._on_activate()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    dialog.close()
+
+
+def test_startup_notice_text_bounds() -> None:
+    assert len(STARTUP_NOTICE.split()) <= 80
+    assert "-" not in STARTUP_NOTICE
+    assert "doxxing" in STARTUP_NOTICE
+
+
+def test_startup_dialog_shows_notice(qapp: QApplication) -> None:
+    dialog = StartupNoticeDialog()
+    labels = [label.text() for label in dialog.findChildren(QLabel)]
+    assert STARTUP_NOTICE in labels
     dialog.close()
 
 
 def test_window_constructs(qapp: QApplication, settings) -> None:
     window = MainWindow(settings)
-    assert len(window._nav_buttons) == 4
-    assert window.stack.count() == 4
+    assert len(window._nav_buttons) == 5
+    assert window.stack.count() == 5
     assert window.sources_table.rowCount() == len(registry.all_specs())
     assert window.sources_table.rowCount() >= 25
+    window.close()
+
+
+def test_personal_popup_once_per_session(
+    qapp: QApplication, settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    def fake_information(parent, title, text):
+        calls.append(text)
+
+    monkeypatch.setattr(desktop.QMessageBox, "information", staticmethod(fake_information))
+    window = MainWindow(settings)
+    assert window._personal_popup_shown is False
+    window._show_page("personal")
+    assert window._personal_popup_shown is True
+    assert calls == [desktop.PERSONAL_NOTICE]
+    window._show_page("history")
+    window._show_page("personal")  # second entry in the same session: no popup
+    assert len(calls) == 1
     window.close()
 
 
@@ -291,4 +343,53 @@ def test_personal_run_flow_renders_results(
     summary_labels = [label.text() for label in window.personal_summary.findChildren(QLabel)]
     assert any("seen 3 time(s)" in text for text in summary_labels)
 
+    window.close()
+
+
+def test_probe_bot_offline_faq(qapp: QApplication, settings) -> None:
+    replies: list[str] = []
+    worker = ProbeBotWorker(settings, history=[], prompt="how do I scan a domain?")
+    worker.reply_ready.connect(replies.append)
+    worker.start()
+    assert worker.wait(8000)
+    assert _wait(qapp, lambda: bool(replies))
+    assert replies == [desktop.PROBE_BOT_FAQ]
+
+
+def test_probe_bot_configured_calls_provider(qapp: QApplication, settings) -> None:
+    settings.probe_bot_api_key = "test-key"
+    settings.probe_bot_base_url = "https://api.test.local"
+    settings.probe_bot_model = "test-model"
+    seen: dict = {}
+
+    def handler(request) -> object:
+        seen["auth"] = request.headers.get("authorization")
+        seen["body"] = request.read().decode()
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "Hello from the provider!"}}]}
+        )
+
+    replies: list[str] = []
+    worker = ProbeBotWorker(settings, history=[], prompt="hello")
+    worker.reply_ready.connect(replies.append)
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("https://api.test.local/chat/completions").mock(side_effect=handler)
+        worker.start()
+        assert worker.wait(8000)
+    assert _wait(qapp, lambda: bool(replies))
+    assert replies == ["Hello from the provider!"]
+    assert seen["auth"] == "Bearer test-key"
+    assert '"model":"test-model"' in seen["body"]
+    assert '"role":"user"' in seen["body"]
+
+
+def test_probe_bot_page_flow(qapp: QApplication, settings) -> None:
+    window = MainWindow(settings)
+    window.bot_input.setText("how do I export a report?")
+    window._on_bot_send()
+    worker = window.bot_worker
+    assert worker is not None
+    assert worker.wait(8000)
+    assert _wait(qapp, lambda: "No AI provider configured" in window.bot_display.toPlainText())
+    assert window.bot_send_button.isEnabled()
     window.close()

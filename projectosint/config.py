@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # sources
     disabled_sources: list[str] = Field(default_factory=list)
     enabled_categories: list[str] = Field(default_factory=list)
+    personal_max_sources: int = Field(default=45, ge=1, le=200)
+
+    # probe bot (OpenAI-compatible chat API; unset key = offline FAQ mode)
+    probe_bot_base_url: str = "https://api.deepseek.com"
+    probe_bot_api_key: str | None = None
+    probe_bot_model: str = "deepseek-chat"
 
     api_keys: ApiKeys = Field(default_factory=ApiKeys)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)

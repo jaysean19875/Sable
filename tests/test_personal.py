@@ -144,5 +144,23 @@ async def test_no_password_means_no_password_row(
     assert all(result.source != "hibp_password" for result in report.results)
 
 
+async def test_sweep_cap(settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sources = [
+        make_collector(f"check_{n}", TargetKind.EMAIL) for n in range(3)
+    ]
+    monkeypatch.setattr(personal.registry, "select", lambda **_: list(sources))
+    settings.personal_max_sources = 1
+    report = await personal.run_checks(
+        settings,
+        emails=["analyst@example.com"],
+        username=None,
+        password=None,
+        deadline_s=5.0,
+        results_dir=tmp_path,
+    )
+    assert report.sources_capped is True
+    assert len(report.results) == 1
+
+
 async def _fake_password_count(_client, _password: str) -> int:
     return 42

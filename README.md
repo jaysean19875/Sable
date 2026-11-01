@@ -1,23 +1,23 @@
-# ProjectOSINT
+﻿# ProjectOSINT
 
 A bounded, provenance-rich OSINT collection platform: modular collectors, an
 asyncio scheduler with hard deadlines, a normalised schema, a SQLite store, a
-JSON/CSV/PDF export path and a native desktop UI — built so that every finding
+JSON/CSV/PDF export path and a native desktop UI â€” built so that every finding
 can be traced back to the endpoint that produced it.
 
 ```text
- target ──▶ registry.select ──▶ asyncio.TaskGroup ──▶ normalise ──▶ SQLite ──▶ export
+ target â”€â”€â–¶ registry.select â”€â”€â–¶ asyncio.TaskGroup â”€â”€â–¶ normalise â”€â”€â–¶ SQLite â”€â”€â–¶ export
             (kind/category)      per-source timeout      dedupe       scans     JSON/CSV/PDF
-                                 + global deadline        + caps     findings      │
-                                        │                                        ▼
+                                 + global deadline        + caps     findings      â”‚
+                                        â”‚                                        â–¼
                               token bucket per host                     desktop (PySide6)
-                                        │
+                                        â”‚
                                  cache (target keyed)
 ```
 
 ## Download (Windows)
 
-Prebuilt: <https://github.com/jaysean19875/Sable/releases/latest> — a single-file
+Prebuilt: <https://github.com/jaysean19875/Sable/releases/latest> â€” a single-file
 `ProjectOSINT.exe`, no Python required. Drop it anywhere; it keeps its
 `config.yaml`, `.env` and `data\` beside itself. Rebuild it any time with
 `build_exe.ps1` (PyInstaller).
@@ -47,7 +47,7 @@ with `--out`, `report.json`, `findings.csv` and `report.pdf`.
 
 ## What a scan actually does
 
-1. **Classify** the target (`domain`, `ip`, `url`, `email`, `username`) —
+1. **Classify** the target (`domain`, `ip`, `url`, `email`, `username`) â€”
    routing is by target kind, so an IP-only adapter never runs against a
    domain.
 2. **Select** collectors from the registry, honouring category/source filters
@@ -65,8 +65,8 @@ and finish in milliseconds without touching the network.
 
 ## Collectors
 
-42 sources are registered; 41 are enabled by default. Five of those need an
-API key and are reported as `skipped` — never as failures — when it is absent.
+52 sources are registered; 51 are enabled by default. Five of those need an
+API key and are reported as `skipped` â€” never as failures â€” when it is absent.
 One search-engine source is deliberately opt-in.
 
 | category | sources |
@@ -76,7 +76,7 @@ One search-engine source is deliberately opt-in.
 | registration | `rdap_domain`, `rdap_ip`, `whois` |
 | infrastructure | `ip_asn_cymru`, `ip_ptr`, `ip_geo` |
 | web | `http_fingerprint`, `http_security_txt`, `http_robots`, `http_sitemap`, `wayback_cdx` |
-| identity | `github_user`, `keybase_user`, `reddit_user`, `gravatar`, `email_domain`, `steam_user`, `gitlab_user`, `stackexchange_user`, `mastodon_user`, `wikipedia_user`, `chesscom_user`, `codeforces_user`, `devto_user` |
+| identity | `github_user`, `keybase_user`, `reddit_user`, `gravatar`, `email_domain`, `steam_user`, `gitlab_user`, `stackexchange_user`, `mastodon_user`, `wikipedia_user`, `chesscom_user`, `codeforces_user`, `devto_user`, `mojang_user`, `roblox_user`, `lichess_user`, `bitbucket_user`, `codeberg_user`, `bluesky_user`, `npm_user`, `speedrun_user`, `scratch_user`, `osrs_hiscores` |
 | exposure / threat | `hibp_breaches`\*, `hibp_pastes`\*, `shodan_host`\*, `urlscan_search`\*, `virustotal_domain`\* |
 | search | `search_ddg` (opt-in) |
 
@@ -87,23 +87,38 @@ including which target kinds each adapter accepts.
 
 The desktop app's Personal Data tab checks one person's exposure: breach and
 paste lookups for emails (HIBP, key gated), a password breach check and a
-public-profile presence sweep across every keyless endpoint in the identity
-catalog.
+public-profile presence sweep. The sweep only uses keyless, public endpoints
+that disclose leaked or public data: it never touches login walled or paid
+platforms (that is why Discord and Microsoft account lookups are deliberately
+absent). The sweep is capped at `personal_max_sources` (default **45**).
 
 Privacy is the design, not a footnote:
 
 - the password is hashed locally and only a **5 character SHA-1 prefix** is
-  sent (HIBP k-anonymity, with response padding) — the password itself never
+  sent (HIBP k-anonymity, with response padding) â€” the password itself never
   leaves the machine and is never written to disk, logs or reports;
 - nothing from this tab goes into the shared scan store or cache, so it is
   invisible in History and to other users of the same installation;
 - reports are written to a `RESULTS` folder **next to the app** (for the
   frozen exe: `dist\RESULTS`) as JSON, CSV and plain text, and nothing is
   uploaded anywhere;
-- the notice explaining this scope is shown on the tab every time it opens.
+- the scope notice pops up **once per session** on first entry to the tab.
 
-\* requires a key. `python -m projectosint sources` prints the live catalog,
-including which target kinds each adapter accepts.
+## License key and startup notice
+
+On first launch the app asks for a **license key** and stores the activation
+next to the app, so it is only asked once per install. Every launch shows a
+short lawful-use notice (educational use only, no doxxing or harassment;
+nothing is collected; results stay on your device in the `RESULTS` folder)
+before the main window opens.
+
+## Probe Bot
+
+The Probe Bot tab is a small chat assistant for the app. Without a configured
+key it answers from a built in guide and sends nothing anywhere. Point it at
+any OpenAI-compatible chat API via `.env` (`OSINT_PROBE_BOT_API_KEY`,
+`OSINT_PROBE_BOT_BASE_URL`, `OSINT_PROBE_BOT_MODEL`; DeepSeek defaults). With
+a key configured, only your chat messages go to that provider.
 
 ### Scope and consent
 
@@ -162,7 +177,7 @@ longer hosts it.  Start it explicitly when you want it:
 ## Development
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest      # 122 tests, no network
+.\.venv\Scripts\python.exe -m pytest      # 138 tests, no network
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m mypy projectosint
 ```
@@ -194,7 +209,7 @@ projectosint/
   personal.py      Personal Data checks: HIBP layers, presence sweep, RESULTS
   collectors/      one module per source family
   web/             FastAPI app + static dashboard (library, not hosted)
-tests/             122 offline tests
+tests/             138 offline tests
 ```
 
 ## Known limits
@@ -207,3 +222,4 @@ tests/             122 offline tests
 - The search-engine adapter is opt-in because automated querying may violate
   engine terms of service.
 - PDF export caps the table at 400 rows; the JSON/CSV exports are complete.
+

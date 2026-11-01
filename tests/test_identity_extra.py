@@ -21,6 +21,16 @@ NAMES = {
     "chesscom_user",
     "codeforces_user",
     "devto_user",
+    "mojang_user",
+    "roblox_user",
+    "lichess_user",
+    "bitbucket_user",
+    "codeberg_user",
+    "bluesky_user",
+    "npm_user",
+    "speedrun_user",
+    "scratch_user",
+    "osrs_hiscores",
 }
 
 
@@ -141,3 +151,146 @@ async def test_devto_missing(user_context: CollectorContext) -> None:
     with respx.mock(assert_all_called=False) as mock:
         mock.get("https://dev.to/api/users/by_username").mock(return_value=httpx.Response(404))
         assert await identity_extra.DevToUser(user_context).collect() == []
+
+
+async def test_mojang_profile(user_context: CollectorContext) -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://api.mojang.com/users/profiles/minecraft/someuser").mock(
+            return_value=httpx.Response(200, json={"id": "abc123", "name": "someuser"})
+        )
+        findings = await identity_extra.MojangUser(user_context).collect()
+    assert findings[0].kind == "identity.mojang"
+    assert findings[0].evidence["uuid"] == "abc123"
+
+
+async def test_roblox_profile(user_context: CollectorContext) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = request.read().decode()
+        return httpx.Response(200, json={"data": [{"id": 77, "name": "someuser"}]})
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("https://users.roblox.com/v1/usernames/users").mock(side_effect=handler)
+        findings = await identity_extra.RobloxUser(user_context).collect()
+    assert findings[0].kind == "identity.roblox"
+    assert "someuser" in seen["body"]
+
+
+async def test_roblox_missing(user_context: CollectorContext) -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("https://users.roblox.com/v1/usernames/users").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        assert await identity_extra.RobloxUser(user_context).collect() == []
+
+
+async def test_lichess_bitbucket_codeberg(user_context: CollectorContext) -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://lichess.org/api/user/someuser").mock(
+            return_value=httpx.Response(200, json={"id": "someuser", "username": "someuser"})
+        )
+        mock.get("https://api.bitbucket.org/2.0/users/someuser").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "username": "someuser",
+                    "display_name": "Some User",
+                    "links": {"html": {"href": "https://bitbucket.org/someuser"}},
+                },
+            )
+        )
+        mock.get("https://codeberg.org/api/v1/users/someuser").mock(
+            return_value=httpx.Response(200, json={"login": "someuser"})
+        )
+        lichess_findings = await identity_extra.LichessUser(user_context).collect()
+        bitbucket_findings = await identity_extra.BitbucketUser(user_context).collect()
+        codeberg_findings = await identity_extra.CodebergUser(user_context).collect()
+    assert lichess_findings[0].kind == "identity.lichess"
+    assert bitbucket_findings[0].value == "https://bitbucket.org/someuser"
+    assert codeberg_findings[0].kind == "identity.codeberg"
+
+
+async def test_bluesky_profile(user_context: CollectorContext) -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile").mock(
+            return_value=httpx.Response(
+                200, json={"did": "did:plc:abc", "handle": "someuser.bsky.social"}
+            )
+        )
+        findings = await identity_extra.BlueskyUser(user_context).collect()
+    assert findings[0].kind == "identity.bluesky"
+
+
+async def test_npm_and_speedrun_and_scratch(user_context: CollectorContext) -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://registry.npmjs.org/-/user/org.couchdb.user:someuser").mock(
+            return_value=httpx.Response(200, json={"name": "someuser", "created": "2020-01-01"})
+        )
+        mock.get("https://www.speedrun.com/api/v1/users").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "abc",
+                            "names": {"international": "someuser"},
+                            "weblink": "https://www.speedrun.com/users/someuser",
+                        }
+                    ]
+                },
+            )
+        )
+        mock.get("https://api.scratch.mit.edu/users/someuser").mock(
+            return_value=httpx.Response(200, json={"id": 9, "username": "someuser"})
+        )
+        npm_findings = await identity_extra.NpmUser(user_context).collect()
+        speedrun_findings = await identity_extra.SpeedrunUser(user_context).collect()
+        scratch_findings = await identity_extra.ScratchUser(user_context).collect()
+    assert npm_findings[0].kind == "identity.npm"
+    assert speedrun_findings[0].kind == "identity.speedrun"
+    assert scratch_findings[0].kind == "identity.scratch"
+
+
+async def test_osrs_hiscores(user_context: CollectorContext) -> None:
+    csv_text = "1,200000000,120\n2,50000000,99\n"
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://secure.runescape.com/m=hiscore_oldschool/index_lite.ws").mock(
+            return_value=httpx.Response(200, text=csv_text)
+        )
+        findings = await identity_extra.OsrsHiscores(user_context).collect()
+    assert findings[0].kind == "identity.osrs"
+    assert findings[0].evidence["hiscores_entries"] == 2
+
+
+async def test_new_sources_missing_are_empty(user_context: CollectorContext) -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://api.mojang.com/users/profiles/minecraft/someuser").mock(
+            return_value=httpx.Response(404)
+        )
+        mock.get("https://lichess.org/api/user/someuser").mock(return_value=httpx.Response(404))
+        mock.get("https://api.bitbucket.org/2.0/users/someuser").mock(
+            return_value=httpx.Response(404)
+        )
+        mock.get("https://codeberg.org/api/v1/users/someuser").mock(
+            return_value=httpx.Response(404)
+        )
+        mock.get("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile").mock(
+            return_value=httpx.Response(400)
+        )
+        mock.get("https://registry.npmjs.org/-/user/org.couchdb.user:someuser").mock(
+            return_value=httpx.Response(404)
+        )
+        mock.get("https://api.scratch.mit.edu/users/someuser").mock(
+            return_value=httpx.Response(404)
+        )
+        for collector in (
+            identity_extra.MojangUser,
+            identity_extra.LichessUser,
+            identity_extra.BitbucketUser,
+            identity_extra.CodebergUser,
+            identity_extra.BlueskyUser,
+            identity_extra.NpmUser,
+            identity_extra.ScratchUser,
+        ):
+            assert await collector(user_context).collect() == []

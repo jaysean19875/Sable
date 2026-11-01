@@ -26,6 +26,14 @@ disabled_sources: []
 # Empty means "every category".  Example: [dns, certificates, registration]
 enabled_categories: []
 
+# Personal Data sweep runs every lawful keyless source up to this cap.
+personal_max_sources: 45
+
+# Probe Bot chat (OpenAI-compatible). Leave the key empty for offline FAQ mode.
+probe_bot_base_url: "https://api.deepseek.com"
+probe_bot_api_key: null
+probe_bot_model: "deepseek-chat"
+
 rate_limit:
   default_rps: 1.0
   burst: 2

@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from PySide6.QtCore import QSize, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
@@ -40,10 +41,12 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -116,6 +119,38 @@ SCOPE_NOTICE = (
 MONO = "Consolas"
 SANS = "Segoe UI"
 
+LICENSE_KEY = "K8QEVB-7V2B54-DPQN9-9OCB1D6-ZVFASTH-MNBK42"
+
+STARTUP_NOTICE = (
+    "This is a lawful OSINT application. It does not collect, sell or "
+    "transmit your information anywhere. Anything you scan is stored only "
+    "on your own device inside the RESULTS folder. Use this tool for "
+    "authorised security research and education only. It must never be "
+    "used for stalking, harassment, doxxing or any unlawful purpose. By "
+    "continuing you confirm you will use it lawfully and with consent."
+)
+
+PROBE_BOT_SYSTEM = (
+    "You are Probe Bot, the built in assistant for ProjectOSINT, a lawful "
+    "OSINT desktop application. Answer questions about using the app, its "
+    "collectors, configuration, exports and lawful OSINT methodology. Be "
+    "concise and specific. Refuse requests involving doxxing, harassment, "
+    "stalking or bypassing other services' authentication."
+)
+
+PROBE_BOT_FAQ = (
+    "No AI provider configured yet. Add OSINT_PROBE_BOT_API_KEY to the .env "
+    "file next to the app (OSINT_PROBE_BOT_BASE_URL and OSINT_PROBE_BOT_MODEL "
+    "are optional and default to DeepSeek). Until then I can answer from the "
+    "built in guide:\n"
+    "  Scan: enter a domain, IP, URL, email or username and press Run scan.\n"
+    "  Personal Data: enter your email or username, optionally a password, to\n"
+    "    check breaches and public profile presence; reports land in RESULTS.\n"
+    "  History: reopen previous scans. Sources: the collector catalog.\n"
+    "  Exports: JSON, CSV and PDF buttons on the results view.\n"
+    "  Keys: HIBP enables the email breach and paste lookups in .env.\n"
+)
+
 PERSONAL_NOTICE = (
     "This Personal Data tab checks whether your email or accounts have "
     "appeared in known data breaches or were traded on dark web markets. "
@@ -138,18 +173,26 @@ def _esc(text: object) -> str:
     )
 
 
-def consent_file(settings: Settings) -> Path:
-    return settings.data_dir / "consent.json"
+def _normalise_key(value: str) -> str:
+    return "".join(ch for ch in value.upper() if ch.isalnum())
 
 
-def consent_needed(settings: Settings) -> bool:
-    return not consent_file(settings).is_file()
+def valid_license_key(value: str) -> bool:
+    return bool(value) and _normalise_key(value) == _normalise_key(LICENSE_KEY)
 
 
-def accept_consent(settings: Settings) -> None:
+def license_file(settings: Settings) -> Path:
+    return settings.data_dir / "license.json"
+
+
+def license_needed(settings: Settings) -> bool:
+    return not license_file(settings).is_file()
+
+
+def save_license(settings: Settings) -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    consent_file(settings).write_text(
-        json.dumps({"accepted": True, "accepted_at": utcnow().isoformat()}),
+    license_file(settings).write_text(
+        json.dumps({"licensed": True, "accepted_at": utcnow().isoformat()}),
         encoding="utf-8",
     )
 
@@ -228,6 +271,9 @@ def _qss() -> str:
     QDialog {{ background: {p['bg']}; }}
     QLabel#error {{ color: {p['err']}; font-size: 12px; }}
     QLabel#empty {{ color: {p['faint']}; font-size: 12px; }}
+    QTextEdit {{ background: {p['surface']}; color: {p['ink']}; border: 1px solid {p['line_strong']};
+        border-radius: 6px; padding: 10px; selection-background-color: {p['surface3']}; }}
+    QMessageBox QLabel {{ color: {p['ink']}; }}
     QFrame#notice {{ background: {p['surface']}; border: 1px solid {p['line_strong']};
         border-left: 3px solid {p['accent']}; border-radius: 6px; }}
     QLabel#notice-text {{ color: {p['dim']}; font-size: 12px; background: transparent; }}
@@ -397,27 +443,76 @@ class DetailPanel(QFrame):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# consent
+# dialogs shown around the main window
 # ─────────────────────────────────────────────────────────────────────────
 
-class ConsentDialog(QDialog):
-    """Shown once, on first run: what this tool does, and what it will not do."""
+class LicenseDialog(QDialog):
+    """Asked once per install: the app is gated behind a license key."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("ProjectOSINT — scope & consent")
-        self.setMinimumWidth(520)
+        self.setWindowTitle("ProjectOSINT — license key required")
+        self.setMinimumWidth(480)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 22, 26, 22)
         layout.setSpacing(12)
 
-        kicker = QLabel("BEFORE YOU START")
+        kicker = QLabel("ACTIVATION")
         kicker.setObjectName("kicker")
-        title = QLabel("Lawful, passive collection only")
+        title = QLabel("Enter your license key to continue")
         title.setStyleSheet(f"color: {PALETTE['ink']}; font-size: 16px; font-weight: 600;")
-        body = QLabel(SCOPE_NOTICE)
+        self.key_input = QLineEdit()
+        self.key_input.setPlaceholderText("XXXXX-XXXXX-XXXXX-XXXXXXX-XXXXXXX-XXXXXX")
+        self.key_input.setFont(_mono_font(11))
+        self.key_input.setMinimumHeight(36)
+        self.key_input.returnPressed.connect(self._on_activate)
+        self.error_label = QLabel("Invalid license key.")
+        self.error_label.setObjectName("error")
+        self.error_label.hide()
+        buttons = QHBoxLayout()
+        activate = QPushButton("Activate")
+        activate.setObjectName("run")
+        activate.setMinimumHeight(36)
+        activate.clicked.connect(self._on_activate)
+        quit_button = QPushButton("Quit")
+        quit_button.setObjectName("ghost")
+        quit_button.setMinimumHeight(36)
+        quit_button.clicked.connect(self.reject)
+        buttons.addWidget(quit_button)
+        buttons.addStretch(1)
+        buttons.addWidget(activate)
+
+        layout.addWidget(kicker)
+        layout.addWidget(title)
+        layout.addWidget(self.key_input)
+        layout.addWidget(self.error_label)
+        layout.addSpacing(6)
+        layout.addLayout(buttons)
+
+    def _on_activate(self) -> None:
+        if valid_license_key(self.key_input.text()):
+            self.accept()
+        else:
+            self.error_label.show()
+
+
+class StartupNoticeDialog(QDialog):
+    """Shown on every launch, before the main window."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("ProjectOSINT — lawful use notice")
+        self.setMinimumWidth(540)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(26, 22, 26, 22)
+        layout.setSpacing(12)
+
+        kicker = QLabel("READ BEFORE USING")
+        kicker.setObjectName("kicker")
+        title = QLabel("Lawful, educational use only")
+        title.setStyleSheet(f"color: {PALETTE['ink']}; font-size: 16px; font-weight: 600;")
+        body = QLabel(STARTUP_NOTICE)
         body.setWordWrap(True)
-        body.setTextFormat(Qt.TextFormat.RichText)
         body.setStyleSheet(f"color: {PALETTE['dim']}; font-size: 12px; background: transparent;")
         accept = QPushButton("I understand — continue")
         accept.setObjectName("run")
@@ -561,6 +656,60 @@ class PersonalWorker(QThread):
         self.event_ready.emit(event, payload)
 
 
+class ProbeBotWorker(QThread):
+    """Chats with an OpenAI-compatible API, or answers from the built in FAQ
+    when no key is configured (in which case nothing leaves the machine)."""
+
+    reply_ready = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        settings: Settings,
+        history: list[dict[str, str]],
+        prompt: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.settings = settings
+        self.history = history
+        self.prompt = prompt
+
+    def run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            self.reply_ready.emit(loop.run_until_complete(self._ask()))
+        except Exception as exc:
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            loop.close()
+
+    async def _ask(self) -> str:
+        if not self.settings.probe_bot_api_key:
+            return PROBE_BOT_FAQ
+        url = f"{self.settings.probe_bot_base_url.rstrip('/')}/chat/completions"
+        messages = [
+            {"role": "system", "content": PROBE_BOT_SYSTEM},
+            *self.history,
+            {"role": "user", "content": self.prompt},
+        ]
+        async with httpx.AsyncClient(timeout=60.0, verify=self.settings.verify_tls) as client:
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {self.settings.probe_bot_api_key}"},
+                json={
+                    "model": self.settings.probe_bot_model,
+                    "messages": messages,
+                    "max_tokens": 600,
+                },
+            )
+        if not response.is_success:
+            raise RuntimeError(f"chat provider returned HTTP {response.status_code}")
+        data = response.json()
+        return str(data["choices"][0]["message"]["content"])
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # main window
 # ─────────────────────────────────────────────────────────────────────────
@@ -575,6 +724,8 @@ class MainWindow(QMainWindow):
         self.worker: ScanWorker | None = None
         self.personal_worker: PersonalWorker | None = None
         self.personal_report: PersonalReport | None = None
+        self.bot_worker: ProbeBotWorker | None = None
+        self._personal_popup_shown = False
         self._assistants: list[AsyncWorker] = []
         self._rows: list[Any] = []
         self._sev_buttons: dict[str, QPushButton] = {}
@@ -614,6 +765,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._build_history_page())
         self.stack.addWidget(self._build_sources_page())
         self.stack.addWidget(self._build_personal_page())
+        self.stack.addWidget(self._build_probe_bot_page())
         root_layout.addWidget(content, 1)
 
     def _build_sidebar(self) -> QFrame:
@@ -650,6 +802,7 @@ class MainWindow(QMainWindow):
             ("personal", "Personal Data"),
             ("history", "History"),
             ("sources", "Sources"),
+            ("bot", "Probe Bot"),
         ):
             button = QPushButton(label)
             button.setObjectName("nav")
@@ -1176,19 +1329,114 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage(f"no RESULTS folder yet at {directory}", 8000)
 
+    # -- probe bot --------------------------------------------------------
+    def _build_probe_bot_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        hint = QLabel(
+            "Chat with Probe Bot about ProjectOSINT: how scans work, the "
+            "collectors, configuration, exports and lawful OSINT methodology. "
+            "Without a configured API key it answers from a built in guide and "
+            "nothing is sent anywhere; with a key, your messages go to that "
+            "provider only."
+        )
+        hint.setObjectName("empty")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.bot_display = QTextEdit()
+        self.bot_display.setReadOnly(True)
+        layout.addWidget(self.bot_display, 1)
+
+        input_row = QHBoxLayout()
+        input_row.setSpacing(10)
+        self.bot_input = QLineEdit()
+        self.bot_input.setPlaceholderText("Ask about the app…")
+        self.bot_input.setMinimumHeight(36)
+        self.bot_input.returnPressed.connect(self._on_bot_send)
+        self.bot_send_button = QPushButton("Send")
+        self.bot_send_button.setObjectName("run")
+        self.bot_send_button.setMinimumHeight(36)
+        self.bot_send_button.clicked.connect(self._on_bot_send)
+        input_row.addWidget(self.bot_input, 1)
+        input_row.addWidget(self.bot_send_button)
+        layout.addLayout(input_row)
+
+        self.bot_history: list[dict[str, str]] = []
+        self._render_bot_log()
+        return page
+
+    def _on_bot_send(self) -> None:
+        if self.bot_worker is not None and self.bot_worker.isRunning():
+            return
+        text = self.bot_input.text().strip()
+        if not text:
+            return
+        self.bot_history.append({"role": "user", "content": text})
+        self.bot_input.clear()
+        self._render_bot_log()
+        self.bot_send_button.setEnabled(False)
+        self.bot_worker = ProbeBotWorker(
+            self.settings, history=list(self.bot_history), prompt=text, parent=self
+        )
+        self.bot_worker.reply_ready.connect(self._on_bot_reply)
+        self.bot_worker.failed.connect(self._on_bot_failed)
+        self.bot_worker.start()
+
+    def _on_bot_reply(self, reply: str) -> None:
+        self.bot_history.append({"role": "assistant", "content": reply})
+        self.bot_send_button.setEnabled(True)
+        self._render_bot_log()
+
+    def _on_bot_failed(self, message: str) -> None:
+        self.bot_history.append({"role": "assistant", "content": f"(error) {message}"})
+        self.bot_send_button.setEnabled(True)
+        self._render_bot_log()
+
+    def _render_bot_log(self) -> None:
+        parts: list[str] = []
+        for entry in self.bot_history[-50:]:
+            label = "YOU" if entry["role"] == "user" else "PROBE BOT"
+            colour = PALETTE["accent"] if entry["role"] == "user" else PALETTE["ink"]
+            body = _esc(entry["content"]).replace("\n", "<br>")
+            parts.append(
+                f'<div style="margin:6px 0">'
+                f'<span style="color:{PALETTE["faint"]}; font-size:9px">{_esc(label)}</span><br>'
+                f'<span style="color:{colour}">{body}</span></div>'
+            )
+        if parts:
+            self.bot_display.setHtml("".join(parts))
+        else:
+            self.bot_display.setHtml(
+                f'<span style="color:{PALETTE["faint"]}">'
+                "Probe Bot is ready. Ask anything about using ProjectOSINT.</span>"
+            )
+        scrollbar = self.bot_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
     # ------------------------------------------------------------------
     def _show_page(self, page: str) -> None:
-        self.stack.setCurrentIndex({"scan": 0, "history": 1, "sources": 2, "personal": 3}[page])
+        self.stack.setCurrentIndex(
+            {"scan": 0, "history": 1, "sources": 2, "personal": 3, "bot": 4}[page]
+        )
         self.title_label.setText(
             {
                 "scan": "New scan",
                 "history": "Scan history",
                 "sources": "Collector catalog",
                 "personal": "Personal data",
+                "bot": "Probe Bot",
             }[page]
         )
         if page == "history":
             self.load_history()
+        if page == "personal" and not self._personal_popup_shown:
+            # once per session, on first entry - not on every tab open
+            self._personal_popup_shown = True
+            QMessageBox.information(self, "Personal Data", PERSONAL_NOTICE)
 
     # -- scan lifecycle -------------------------------------------------
     def _on_run_clicked(self) -> None:
@@ -1502,6 +1750,9 @@ class MainWindow(QMainWindow):
         if self.personal_worker is not None and self.personal_worker.isRunning():
             self.personal_worker.terminate()
             self.personal_worker.wait(1000)
+        if self.bot_worker is not None and self.bot_worker.isRunning():
+            self.bot_worker.terminate()
+            self.bot_worker.wait(1000)
         for assistant in self._assistants:
             if assistant.isRunning():
                 assistant.wait(1000)
@@ -1520,11 +1771,15 @@ def main(argv: list[str] | None = None, settings: Settings | None = None) -> int
     app.setFont(QFont(SANS, 9))
     app.setStyleSheet(_qss())
 
-    if consent_needed(settings):
-        dialog = ConsentDialog()
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+    if os.environ.get("OSINT_SKIP_NOTICES") != "1":
+        if license_needed(settings):
+            license_dialog = LicenseDialog()
+            if license_dialog.exec() != QDialog.DialogCode.Accepted:
+                return 0
+            save_license(settings)
+        notice = StartupNoticeDialog()
+        if notice.exec() != QDialog.DialogCode.Accepted:
             return 0
-        accept_consent(settings)
 
     window = MainWindow(settings)
     window.show()
