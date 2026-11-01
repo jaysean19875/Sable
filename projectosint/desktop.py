@@ -1767,6 +1767,7 @@ def main(argv: list[str] | None = None, settings: Settings | None = None) -> int
     app.setStyle("Fusion")
     settings = settings or load_settings()
     settings.ensure_dirs()
+    default_results_dir().mkdir(parents=True, exist_ok=True)
     setup_logging(settings.log_level, json_logs=settings.log_json, log_dir=settings.data_dir / "logs")
     app.setFont(QFont(SANS, 9))
     app.setStyleSheet(_qss())
