@@ -17,11 +17,17 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication, QFileDialog, QLabel
+from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QLineEdit
 
 import projectosint.desktop as desktop
 from projectosint import registry
-from projectosint.desktop import ConsentDialog, MainWindow, accept_consent, consent_needed
+from projectosint.desktop import (
+    PERSONAL_NOTICE,
+    ConsentDialog,
+    MainWindow,
+    accept_consent,
+    consent_needed,
+)
 from projectosint.models import (
     Category,
     CollectorResult,
@@ -32,6 +38,7 @@ from projectosint.models import (
     Severity,
     Status,
 )
+from projectosint.personal import PersonalReport, PersonalSourceResult
 from projectosint.store import Store
 from projectosint.targets import parse_target
 
@@ -129,8 +136,8 @@ def test_consent_dialog_has_scope_text(qapp: QApplication) -> None:
 
 def test_window_constructs(qapp: QApplication, settings) -> None:
     window = MainWindow(settings)
-    assert len(window._nav_buttons) == 3
-    assert window.stack.count() == 3
+    assert len(window._nav_buttons) == 4
+    assert window.stack.count() == 4
     assert window.sources_table.rowCount() == len(registry.all_specs())
     assert window.sources_table.rowCount() >= 25
     window.close()
@@ -224,3 +231,64 @@ def test_history_and_reopen(qapp: QApplication, settings) -> None:
 async def _save(settings, report: ScanReport) -> None:
     async with Store(settings.db_path) as store:
         await store.save(report)
+
+
+async def _fake_run_checks(settings, *, emails, username, password, deadline_s,
+                           results_dir=None, on_event=None) -> PersonalReport:
+    """Same call shape as projectosint.personal.run_checks, zero network."""
+    if on_event:
+        on_event("personal_start", {"scan_id": "pdtest", "total": 2,
+                                    "sources": ["check_a · email", "check_b · user"]})
+        on_event("source_done", {"source": "check_a · email", "status": "ok", "count": 1})
+        on_event("source_done", {"source": "check_b · user", "status": "skipped", "count": 0})
+    report = PersonalReport(
+        scan_id="pdtest",
+        emails=emails,
+        username=username,
+        password_checked=password is not None,
+        password_seen_in_breaches=3 if password else None,
+        results=[
+            PersonalSourceResult(source="check_a", category="exposure", status="ok",
+                                 count=1, findings=["test.kind: 1"]),
+            PersonalSourceResult(source="check_b", category="exposure", status="skipped",
+                                 detail="needs key"),
+        ],
+        files=["pdtest_personal.json", "pdtest_personal.csv", "pdtest_personal.txt"],
+    )
+    if on_event:
+        on_event("personal_done", {"scan_id": "pdtest", "files": report.files, "summary": {}})
+    return report
+
+
+def test_personal_page_has_notice_and_masked_password(qapp: QApplication, settings) -> None:
+    window = MainWindow(settings)
+    assert "personal" in window._nav_buttons
+    labels = [label.text() for label in window.findChildren(QLabel)]
+    assert PERSONAL_NOTICE in labels
+    assert window.personal_password_input.echoMode() is QLineEdit.EchoMode.Password
+    window.close()
+
+
+def test_personal_run_flow_renders_results(
+    qapp: QApplication, settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(desktop, "run_checks", _fake_run_checks)
+    window = MainWindow(settings)
+    window.personal_email_input.setText("analyst@example.com")
+    window.personal_username_input.setText("analyst")
+    window.personal_password_input.setText("pw123")
+    window._on_personal_run()
+
+    worker = window.personal_worker
+    assert worker is not None
+    assert worker.wait(8000), "personal worker did not finish"
+    assert _wait(qapp, lambda: window.personal_table.rowCount() == 2)
+
+    assert window.personal_password_input.text() == ""  # cleared from the widget
+    assert window.personal_run_button.isEnabled()
+    assert not window.personal_results.isHidden()
+    assert window.personal_chips.chip("check_a · email") is not None
+    summary_labels = [label.text() for label in window.personal_summary.findChildren(QLabel)]
+    assert any("seen 3 time(s)" in text for text in summary_labels)
+
+    window.close()

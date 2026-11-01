@@ -13,5 +13,10 @@ logs/
 out/
 dist/
 build/
+dist-portable/
+build-portable/
+distdebug/
+builddbg/
+RESULTS/
 *.spec
 *.egg-info/

@@ -73,5 +73,22 @@ time.sleep(0.3)
 app.processEvents()
 window.grab().save(str(OUT / "desktop-history.png"))
 
+# Personal Data page (idle, then a real check run)
+window._nav_buttons["personal"].setChecked(True)
+window._show_page("personal")
+app.processEvents()
+window.grab().save(str(OUT / "desktop-personal.png"))
+
+window.personal_email_input.setText("nobody@example.com")
+window.personal_username_input.setText("example")
+window.personal_password_input.setText("password")
+window._on_personal_run()
+deadline = time.monotonic() + 90
+while window.personal_report is None and time.monotonic() < deadline:
+    app.processEvents()
+    time.sleep(0.05)
+app.processEvents()
+window.grab().save(str(OUT / "desktop-personal-results.png"))
+
 window.close()
 print("captured:", sorted(p.name for p in OUT.glob("desktop-*.png")))

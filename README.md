@@ -65,7 +65,7 @@ and finish in milliseconds without touching the network.
 
 ## Collectors
 
-33 sources are registered; 32 are enabled by default. Four of those need an
+42 sources are registered; 41 are enabled by default. Five of those need an
 API key and are reported as `skipped` — never as failures — when it is absent.
 One search-engine source is deliberately opt-in.
 
@@ -76,9 +76,31 @@ One search-engine source is deliberately opt-in.
 | registration | `rdap_domain`, `rdap_ip`, `whois` |
 | infrastructure | `ip_asn_cymru`, `ip_ptr`, `ip_geo` |
 | web | `http_fingerprint`, `http_security_txt`, `http_robots`, `http_sitemap`, `wayback_cdx` |
-| identity | `github_user`, `keybase_user`, `reddit_user`, `gravatar`, `email_domain` |
-| exposure / threat | `hibp_breaches`\*, `shodan_host`\*, `urlscan_search`\*, `virustotal_domain`\* |
+| identity | `github_user`, `keybase_user`, `reddit_user`, `gravatar`, `email_domain`, `steam_user`, `gitlab_user`, `stackexchange_user`, `mastodon_user`, `wikipedia_user`, `chesscom_user`, `codeforces_user`, `devto_user` |
+| exposure / threat | `hibp_breaches`\*, `hibp_pastes`\*, `shodan_host`\*, `urlscan_search`\*, `virustotal_domain`\* |
 | search | `search_ddg` (opt-in) |
+
+\* requires a key. `python -m projectosint sources` prints the live catalog,
+including which target kinds each adapter accepts.
+
+## Personal Data
+
+The desktop app's Personal Data tab checks one person's exposure: breach and
+paste lookups for emails (HIBP, key gated), a password breach check and a
+public-profile presence sweep across every keyless endpoint in the identity
+catalog.
+
+Privacy is the design, not a footnote:
+
+- the password is hashed locally and only a **5 character SHA-1 prefix** is
+  sent (HIBP k-anonymity, with response padding) — the password itself never
+  leaves the machine and is never written to disk, logs or reports;
+- nothing from this tab goes into the shared scan store or cache, so it is
+  invisible in History and to other users of the same installation;
+- reports are written to a `RESULTS` folder **next to the app** (for the
+  frozen exe: `dist\RESULTS`) as JSON, CSV and plain text, and nothing is
+  uploaded anywhere;
+- the notice explaining this scope is shown on the tab every time it opens.
 
 \* requires a key. `python -m projectosint sources` prints the live catalog,
 including which target kinds each adapter accepts.
@@ -140,7 +162,7 @@ longer hosts it.  Start it explicitly when you want it:
 ## Development
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest      # 98 tests, no network
+.\.venv\Scripts\python.exe -m pytest      # 122 tests, no network
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m mypy projectosint
 ```
@@ -169,9 +191,10 @@ projectosint/
   export.py        JSON / CSV / PDF
   cli.py           scan | sources | stats | cache | desktop
   desktop.py       PySide6 window: chips console, findings, history, consent
+  personal.py      Personal Data checks: HIBP layers, presence sweep, RESULTS
   collectors/      one module per source family
   web/             FastAPI app + static dashboard (library, not hosted)
-tests/             98 offline tests
+tests/             122 offline tests
 ```
 
 ## Known limits

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -53,6 +54,7 @@ from .config import Settings, load_settings
 from .export import write_csv, write_json, write_pdf
 from .logging_setup import get_logger, setup_logging
 from .models import ScanReport, Target
+from .personal import PersonalReport, default_results_dir, parse_emails, run_checks
 from .scheduler import ScanEngine
 from .store import Store
 from .targets import parse_target
@@ -113,6 +115,13 @@ SCOPE_NOTICE = (
 
 MONO = "Consolas"
 SANS = "Segoe UI"
+
+PERSONAL_NOTICE = (
+    "This Personal Data tab checks whether your email or accounts have "
+    "appeared in known data breaches or were traded on dark web markets. "
+    "It uses only public lawful sources. Nothing you type leaves this "
+    "computer and every result is saved in a RESULTS folder next to the app."
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -219,6 +228,9 @@ def _qss() -> str:
     QDialog {{ background: {p['bg']}; }}
     QLabel#error {{ color: {p['err']}; font-size: 12px; }}
     QLabel#empty {{ color: {p['faint']}; font-size: 12px; }}
+    QFrame#notice {{ background: {p['surface']}; border: 1px solid {p['line_strong']};
+        border-left: 3px solid {p['accent']}; border-radius: 6px; }}
+    QLabel#notice-text {{ color: {p['dim']}; font-size: 12px; background: transparent; }}
     """
 
 
@@ -500,6 +512,55 @@ async def _store_call(settings: Settings, fn: Callable[[Store], Any]) -> Any:
         return await fn(store)
 
 
+class PersonalWorker(QThread):
+    """Runs the Personal Data sweep on its own loop; the password is kept
+    in this worker's memory only and never written to disk or logs."""
+
+    event_ready = Signal(str, dict)
+    finished_report = Signal(object)  # PersonalReport
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        emails: list[str],
+        username: str | None,
+        password: str | None,
+        deadline_s: float,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.settings = settings
+        self.emails = emails
+        self.username = username
+        self.password = password
+        self.deadline_s = deadline_s
+
+    def run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            report = loop.run_until_complete(
+                run_checks(
+                    self.settings,
+                    emails=self.emails,
+                    username=self.username,
+                    password=self.password,
+                    deadline_s=self.deadline_s,
+                    on_event=self._emit,
+                )
+            )
+            self.finished_report.emit(report)
+        except Exception as exc:  # surfaced to the UI, never swallowed
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            loop.close()
+
+    def _emit(self, event: str, payload: dict[str, Any]) -> None:
+        self.event_ready.emit(event, payload)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # main window
 # ─────────────────────────────────────────────────────────────────────────
@@ -512,6 +573,8 @@ class MainWindow(QMainWindow):
         self.log = get_logger("desktop")
         self.report: ScanReport | None = None
         self.worker: ScanWorker | None = None
+        self.personal_worker: PersonalWorker | None = None
+        self.personal_report: PersonalReport | None = None
         self._assistants: list[AsyncWorker] = []
         self._rows: list[Any] = []
         self._sev_buttons: dict[str, QPushButton] = {}
@@ -550,6 +613,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._build_scan_page())
         self.stack.addWidget(self._build_history_page())
         self.stack.addWidget(self._build_sources_page())
+        self.stack.addWidget(self._build_personal_page())
         root_layout.addWidget(content, 1)
 
     def _build_sidebar(self) -> QFrame:
@@ -581,7 +645,12 @@ class MainWindow(QMainWindow):
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
         self._nav_buttons: dict[str, QPushButton] = {}
-        for key, label in (("scan", "Scan"), ("history", "History"), ("sources", "Sources")):
+        for key, label in (
+            ("scan", "Scan"),
+            ("personal", "Personal Data"),
+            ("history", "History"),
+            ("sources", "Sources"),
+        ):
             button = QPushButton(label)
             button.setObjectName("nav")
             button.setCheckable(True)
@@ -830,11 +899,293 @@ class MainWindow(QMainWindow):
         self.sources_table = table
         return page
 
+    # -- personal data ----------------------------------------------------
+    def _build_personal_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        notice = QFrame()
+        notice.setObjectName("notice")
+        notice_layout = QHBoxLayout(notice)
+        notice_layout.setContentsMargins(14, 10, 14, 10)
+        notice_text = QLabel(PERSONAL_NOTICE)
+        notice_text.setObjectName("notice-text")
+        notice_text.setWordWrap(True)
+        notice_layout.addWidget(notice_text, 1)
+        layout.addWidget(notice)
+
+        form = QHBoxLayout()
+        form.setSpacing(10)
+        self.personal_email_input = QLineEdit()
+        self.personal_email_input.setPlaceholderText("email@example.com, another@example.com")
+        self.personal_email_input.setFont(_mono_font(11))
+        self.personal_email_input.setMinimumHeight(36)
+        self.personal_email_input.returnPressed.connect(self._on_personal_run)
+        self.personal_username_input = QLineEdit()
+        self.personal_username_input.setPlaceholderText("username (optional)")
+        self.personal_username_input.setFont(_mono_font(11))
+        self.personal_username_input.setMinimumHeight(36)
+        self.personal_username_input.returnPressed.connect(self._on_personal_run)
+        self.personal_password_input = QLineEdit()
+        self.personal_password_input.setPlaceholderText("password (optional, never stored)")
+        self.personal_password_input.setFont(_mono_font(11))
+        self.personal_password_input.setMinimumHeight(36)
+        self.personal_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.personal_password_input.returnPressed.connect(self._on_personal_run)
+        self.personal_deadline_combo = QComboBox()
+        self.personal_deadline_combo.addItems(["60", "120", "180", "300"])
+        self.personal_deadline_combo.setCurrentText("180")
+        self.personal_deadline_combo.setMinimumHeight(36)
+        self.personal_deadline_combo.setFixedWidth(84)
+        self.personal_run_button = QPushButton("Check personal data")
+        self.personal_run_button.setObjectName("run")
+        self.personal_run_button.setMinimumHeight(36)
+        self.personal_run_button.clicked.connect(self._on_personal_run)
+        form.addWidget(self.personal_email_input, 3)
+        form.addWidget(self.personal_username_input, 2)
+        form.addWidget(self.personal_password_input, 2)
+        form.addWidget(self.personal_deadline_combo)
+        form.addWidget(self.personal_run_button)
+        layout.addLayout(form)
+
+        self.personal_error = QLabel()
+        self.personal_error.setObjectName("error")
+        self.personal_error.setWordWrap(True)
+        self.personal_error.hide()
+        layout.addWidget(self.personal_error)
+
+        self.personal_hint = QLabel(
+            "Runs the lawful breach checks and a public profile sweep for the "
+            "details above. The password is checked with k anonymity: it is "
+            "hashed locally and only a 5 character prefix leaves this machine. "
+            "Reports land in a RESULTS folder next to the app and nothing is "
+            "uploaded anywhere."
+        )
+        self.personal_hint.setObjectName("empty")
+        self.personal_hint.setWordWrap(True)
+        self.personal_hint.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.personal_hint, 1)
+
+        self.personal_console = QFrame()
+        self.personal_console.setObjectName("panel")
+        personal_console_layout = QVBoxLayout(self.personal_console)
+        personal_console_layout.setContentsMargins(0, 0, 0, 0)
+        personal_console_layout.setSpacing(0)
+        personal_head = QHBoxLayout()
+        personal_head.setContentsMargins(14, 8, 14, 8)
+        personal_kicker = QLabel("PERSONAL CHECK PROGRESS")
+        personal_kicker.setObjectName("kicker")
+        self.personal_progress = QLabel("0 / 0")
+        self.personal_progress.setFont(_mono_font(10))
+        self.personal_progress.setStyleSheet(f"color: {PALETTE['faint']};")
+        personal_head.addWidget(personal_kicker)
+        personal_head.addStretch(1)
+        personal_head.addWidget(self.personal_progress)
+        personal_console_layout.addLayout(personal_head)
+        self.personal_chips = ChipList()
+        personal_console_layout.addWidget(self.personal_chips)
+        personal_console_layout.addSpacing(4)
+        layout.addWidget(self.personal_console)
+        self.personal_console.hide()
+
+        self.personal_results = QWidget()
+        personal_results_layout = QVBoxLayout(self.personal_results)
+        personal_results_layout.setContentsMargins(0, 0, 0, 0)
+        personal_results_layout.setSpacing(10)
+
+        self.personal_summary = QFrame()
+        self.personal_summary.setObjectName("summary")
+        self.personal_summary_layout = QHBoxLayout(self.personal_summary)
+        self.personal_summary_layout.setContentsMargins(16, 10, 16, 10)
+        self.personal_summary_layout.setSpacing(26)
+        personal_results_layout.addWidget(self.personal_summary)
+
+        self.personal_table = QTableWidget(0, 5)
+        self.personal_table.setHorizontalHeaderLabels(
+            ["Source", "Category", "Status", "Findings", "Detail"]
+        )
+        self.personal_table.verticalHeader().setVisible(False)
+        self.personal_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.personal_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.personal_table.setShowGrid(False)
+        self.personal_table.setAlternatingRowColors(True)
+        self.personal_table.setWordWrap(True)
+        personal_header = self.personal_table.horizontalHeader()
+        personal_header.setStretchLastSection(True)
+        personal_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.personal_table.setColumnWidth(0, 170)
+        self.personal_table.setColumnWidth(1, 110)
+        self.personal_table.setColumnWidth(2, 90)
+        self.personal_table.setColumnWidth(3, 330)
+        personal_results_layout.addWidget(self.personal_table, 1)
+
+        open_button = QPushButton("Open RESULTS folder")
+        open_button.setObjectName("ghost")
+        open_button.setMinimumHeight(28)
+        open_button.clicked.connect(self._open_results_folder)
+        local_note = QLabel("Reports are written to the RESULTS folder beside the app. Nothing was uploaded.")
+        local_note.setObjectName("empty")
+        bottom_row = QHBoxLayout()
+        bottom_row.addWidget(open_button)
+        bottom_row.addSpacing(10)
+        bottom_row.addWidget(local_note, 1)
+        personal_results_layout.addLayout(bottom_row)
+        layout.addWidget(self.personal_results, 1)
+        self.personal_results.hide()
+        return page
+
+    def _on_personal_run(self) -> None:
+        emails = parse_emails(self.personal_email_input.text())
+        username = self.personal_username_input.text().strip() or None
+        password = self.personal_password_input.text() or None
+        if not emails and not username:
+            self._show_personal_error("Enter at least one email or a username.")
+            return
+        self._show_personal_error(None)
+        self.personal_report = None
+        self.personal_hint.hide()
+        self.personal_results.hide()
+        self.personal_console.show()
+        self.personal_chips.rebuild([])
+        self.personal_progress.setText("0 / 0")
+        self._personal_total = 0
+        self._personal_done = 0
+        self.personal_run_button.setEnabled(False)
+        self.personal_password_input.clear()  # never keep it on screen afterwards
+        deadline = float(self.personal_deadline_combo.currentText())
+        self.personal_worker = PersonalWorker(
+            self.settings,
+            emails=emails,
+            username=username,
+            password=password,
+            deadline_s=deadline,
+            parent=self,
+        )
+        self.personal_worker.event_ready.connect(self._on_personal_event)
+        self.personal_worker.finished_report.connect(self._on_personal_report)
+        self.personal_worker.failed.connect(self._on_personal_failed)
+        self.personal_worker.start()
+
+    def _on_personal_event(self, event: str, payload: dict[str, Any]) -> None:
+        if event == "personal_start":
+            self.personal_chips.rebuild(list(payload.get("sources") or []))
+            self._personal_total = int(payload.get("total") or 0)
+            self._personal_done = 0
+            self.personal_progress.setText(f"0 / {self._personal_total}")
+        elif event == "source_start":
+            chip = self.personal_chips.chip(str(payload.get("source")))
+            if chip:
+                chip.set_status("running")
+        elif event == "source_done":
+            self._personal_done += 1
+            chip = self.personal_chips.chip(str(payload.get("source")))
+            if chip:
+                chip.set_status(str(payload.get("status")), int(payload.get("count") or 0))
+            done_text = f"{self._personal_done} / {self._personal_total or self._personal_done}"
+            self.personal_progress.setText(done_text)
+
+    def _on_personal_report(self, report: PersonalReport) -> None:
+        self.personal_report = report
+        self.personal_console.hide()
+        self.personal_results.show()
+        self.personal_run_button.setEnabled(True)
+        self._render_personal_summary(report)
+        self._render_personal_table(report)
+        self.statusBar().showMessage(
+            f"personal check {report.scan_id} finished; {len(report.files)} files in RESULTS",
+            8000,
+        )
+
+    def _on_personal_failed(self, message: str) -> None:
+        self._show_personal_error(message)
+        self.personal_run_button.setEnabled(True)
+        self.personal_console.hide()
+        self.personal_hint.show()
+
+    def _show_personal_error(self, message: str | None) -> None:
+        if message:
+            self.personal_error.setText(message)
+            self.personal_error.show()
+        else:
+            self.personal_error.hide()
+
+    def _render_personal_summary(self, report: PersonalReport) -> None:
+        while self.personal_summary_layout.count():
+            item = self.personal_summary_layout.takeAt(0)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        password_state = "not checked"
+        if report.password_checked:
+            count = report.password_seen_in_breaches
+            password_state = "clean" if count == 0 else f"seen {count} time(s)"
+        statuses = "  ·  ".join(f"{key} {value}" for key, value in report.summary.items())
+        for key, value in (
+            ("EMAILS", ", ".join(report.emails) or "none"),
+            ("USERNAME", report.username or "none"),
+            ("PASSWORD", password_state),
+            ("SOURCES", statuses or "—"),
+            ("REPORTS", str(len(report.files))),
+        ):
+            box = QWidget()
+            box_layout = QVBoxLayout(box)
+            box_layout.setContentsMargins(0, 0, 0, 0)
+            box_layout.setSpacing(2)
+            kicker = QLabel(key)
+            kicker.setObjectName("stat-k")
+            value_label = QLabel(value)
+            value_label.setObjectName("stat-v")
+            value_label.setFont(_mono_font(10))
+            value_label.setToolTip(value)
+            box_layout.addWidget(kicker)
+            box_layout.addWidget(value_label)
+            self.personal_summary_layout.addWidget(box)
+        self.personal_summary_layout.addStretch(1)
+
+    def _render_personal_table(self, report: PersonalReport) -> None:
+        table = self.personal_table
+        table.setRowCount(len(report.results))
+        for row_index, result in enumerate(report.results):
+            source_item = QTableWidgetItem(result.source)
+            source_item.setFont(_mono_font(10))
+            category_item = QTableWidgetItem(result.category)
+            category_item.setForeground(QColor(PALETTE["dim"]))
+            status_item = QTableWidgetItem(result.status.upper())
+            status_item.setForeground(
+                QColor(STATUS_COLOURS.get(result.status, PALETTE["faint"]))
+            )
+            status_item.setFont(_mono_font(9, bold=True))
+            findings_item = QTableWidgetItem("  |  ".join(result.findings))
+            findings_item.setFont(_mono_font(10))
+            detail_item = QTableWidgetItem(result.detail or result.error or "")
+            detail_item.setForeground(QColor(PALETTE["dim"]))
+            table.setItem(row_index, 0, source_item)
+            table.setItem(row_index, 1, category_item)
+            table.setItem(row_index, 2, status_item)
+            table.setItem(row_index, 3, findings_item)
+            table.setItem(row_index, 4, detail_item)
+
+    def _open_results_folder(self) -> None:
+        directory = default_results_dir()
+        if directory.is_dir():
+            os.startfile(str(directory))
+        else:
+            self.statusBar().showMessage(f"no RESULTS folder yet at {directory}", 8000)
+
     # ------------------------------------------------------------------
     def _show_page(self, page: str) -> None:
-        self.stack.setCurrentIndex({"scan": 0, "history": 1, "sources": 2}[page])
+        self.stack.setCurrentIndex({"scan": 0, "history": 1, "sources": 2, "personal": 3}[page])
         self.title_label.setText(
-            {"scan": "New scan", "history": "Scan history", "sources": "Collector catalog"}[page]
+            {
+                "scan": "New scan",
+                "history": "Scan history",
+                "sources": "Collector catalog",
+                "personal": "Personal data",
+            }[page]
         )
         if page == "history":
             self.load_history()
@@ -1148,6 +1499,9 @@ class MainWindow(QMainWindow):
         if self.worker is not None and self.worker.isRunning():
             self.worker.terminate()
             self.worker.wait(1000)
+        if self.personal_worker is not None and self.personal_worker.isRunning():
+            self.personal_worker.terminate()
+            self.personal_worker.wait(1000)
         for assistant in self._assistants:
             if assistant.isRunning():
                 assistant.wait(1000)
